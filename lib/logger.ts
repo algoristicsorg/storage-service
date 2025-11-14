@@ -22,7 +22,7 @@ async function send(level: 'INFO' | 'DEBUG' | 'WARN' | 'ERROR', message: string)
   } catch {}
 }
 
-export const log = {
+export const logger = {
   info: (m: string) => send('INFO', m),
   debug: (m: string) => send('DEBUG', m),
   warn: (m: string) => send('WARN', m),

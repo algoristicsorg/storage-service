@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { createS3Client, getOrgBucketName } from '@/lib/minio';
 import { CreateBucketCommand, HeadBucketCommand, PutObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
-import { log } from '@/lib/logger';
+import { logger } from '@/lib/logger';
 
 const uploadSchema = z.object({ orgId: z.string().min(1), key: z.string().min(1), content: z.string().min(1) });
 
@@ -16,7 +16,7 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const orgId = searchParams.get('orgId');
   if (!orgId) return NextResponse.json({ error: 'orgId required' }, { status: 400 });
-  await log.info(`GET /api/storage orgId=${orgId}`);
+  await logger.info(`GET /api/storage orgId=${orgId}`);
   const s3 = createS3Client();
   const bucket = getOrgBucketName(orgId);
   try {
@@ -35,7 +35,7 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const body = await req.json();
   const { orgId, key, content } = uploadSchema.parse(body);
-  await log.info(`POST /api/storage orgId=${orgId} key=${key}`);
+  await logger.info(`POST /api/storage orgId=${orgId} key=${key}`);
   const s3 = createS3Client();
   const bucket = getOrgBucketName(orgId);
   try {
