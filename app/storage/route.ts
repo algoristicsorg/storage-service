@@ -10,6 +10,8 @@ const uploadSchema = z.object({ orgId: z.string().min(1), key: z.string().min(1)
  * GET /api/storage
  * Why: Lists objects for an organization to support content management.
  */
+
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const orgId = searchParams.get('orgId');
@@ -42,6 +44,7 @@ export async function POST(req: Request) {
     await s3.send(new CreateBucketCommand({ Bucket: bucket }));
   }
   await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: Buffer.from(content, 'utf8'), ContentType: 'text/plain' }));
+  const url =`http://localhost:4006/api/storage?orgId=${bucket}&key=${key}`
   return NextResponse.json({ bucket, key, status: 'uploaded' }, { status: 201 });
 }
 
