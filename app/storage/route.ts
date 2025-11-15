@@ -45,7 +45,7 @@ export async function POST(req: Request) {
   }
   await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: Buffer.from(content, 'utf8'), ContentType: 'text/plain' }));
   const url =`http://localhost:4006/api/storage?orgId=${bucket}&key=${key}`
-  return NextResponse.json({ bucket, key, status: 'uploaded' }, { status: 201 });
+  return NextResponse.json({ bucket, key, status: 'uploaded',url }, { status: 201 });
 }
 
 
