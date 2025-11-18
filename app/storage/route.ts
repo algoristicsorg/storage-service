@@ -34,8 +34,10 @@ export async function GET(req: Request) {
  */
 export async function POST(req: Request) {
   const body = await req.json();
-  const { orgId, key, content } = uploadSchema.parse(body);
-  await logger.info(`POST /api/storage orgId=${orgId} key=${key}`);
+  const { orgId, key, content, contentType = 'application/octet-stream' } = uploadSchema.extend({
+    contentType: z.string().optional(),
+  }).parse(body);
+  await logger.info(`POST /storage orgId=${orgId} key=${key}`);
   const s3 = createS3Client();
   const bucket = getOrgBucketName(orgId);
   try {
@@ -43,9 +45,18 @@ export async function POST(req: Request) {
   } catch {
     await s3.send(new CreateBucketCommand({ Bucket: bucket }));
   }
-  await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: Buffer.from(content, 'utf8'), ContentType: 'text/plain' }));
-  const url =`http://localhost:4006/api/storage?orgId=${bucket}&key=${key}`
-  return NextResponse.json({ bucket, key, status: 'uploaded',url }, { status: 201 });
+ const buffer = Buffer.from(content, 'base64');
+
+  await s3.send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    Body: buffer,
+    ContentType: contentType, // Use contentType from request or default generic
+  }));
+  const minioEndpoint = process.env.EXTERNAL_MINIO_ENDPOINT || 'http://localhost:9000';
+  const minioUrl = `${minioEndpoint}/${bucket}/${encodeURIComponent(key)}`;
+  // url =`/storage?orgId=${orgId}&key=${key}`
+  return NextResponse.json({ bucket, key, status: 'uploaded',url:minioUrl }, { status: 201 });
 }
 
 
