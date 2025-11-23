@@ -5,13 +5,7 @@ import { CreateBucketCommand, HeadBucketCommand, PutObjectCommand, ListObjectsV2
 import { logger } from '@/lib/logger';
 
 
-export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: '100mb', // Keep large body limit
-    },
-  },
-};
+
 
 const uploadSchema = z.object({
   orgId: z.string().min(1),
