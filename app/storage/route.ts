@@ -34,29 +34,40 @@ export async function GET(req: Request) {
  */
 export async function POST(req: Request) {
   const body = await req.json();
-  const { orgId, key, content, contentType = 'application/octet-stream' } = uploadSchema.extend({
-    contentType: z.string().optional(),
-  }).parse(body);
-  await logger.info(`POST /storage orgId=${orgId} key=${key}`);
+  const schema = uploadSchema.extend({ contentType: z.string().optional() });
+  const { orgId, key, content, contentType } = schema.parse(body);
+
+  if (!contentType || contentType.toLowerCase() !== 'video/mp4') {
+    return NextResponse.json({ error: 'Only video/mp4 content type allowed' }, { status: 400 });
+  }
+
   const s3 = createS3Client();
   const bucket = getOrgBucketName(orgId);
+
   try {
     await s3.send(new HeadBucketCommand({ Bucket: bucket }));
   } catch {
     await s3.send(new CreateBucketCommand({ Bucket: bucket }));
   }
- const buffer = Buffer.from(content, 'base64');
+
+  const buffer = Buffer.from(content, 'base64');
+
+  // Basic MP4 container check
+  if (buffer.slice(4, 8).toString('utf-8') !== 'ftyp') {
+    return NextResponse.json({ error: 'Uploaded file is not a valid MP4 container' }, { status: 400 });
+  }
 
   await s3.send(new PutObjectCommand({
     Bucket: bucket,
     Key: key,
     Body: buffer,
-    ContentType: contentType, // Use contentType from request or default generic
+    ContentType: 'video/mp4',
   }));
+
   const minioEndpoint = process.env.EXTERNAL_MINIO_ENDPOINT || 'http://localhost:9000';
   const minioUrl = `${minioEndpoint}/${bucket}/${encodeURIComponent(key)}`;
-  // url =`/storage?orgId=${orgId}&key=${key}`
-  return NextResponse.json({ bucket, key, status: 'uploaded',url:minioUrl }, { status: 201 });
+
+  return NextResponse.json({ bucket, key, status: 'uploaded', url: minioUrl }, { status: 201 });
 }
 
 
