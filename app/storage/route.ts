@@ -48,18 +48,9 @@ export async function GET(req: Request) {
  * Why: Uploads a small text blob into the org-specific bucket.
  */
 export async function POST(req: Request) {
-  let parsedBody;
-
   try {
-    // Read raw text body for safer parsing
-    const rawBody = await req.text();
-
-    try {
-      parsedBody = JSON.parse(rawBody);
-    } catch (e: unknown) {
-      const errorMsg = e instanceof Error ? e.message : String(e);
-      return NextResponse.json({ error: `Malformed JSON: ${errorMsg}` }, { status: 400 });
-    }
+    // Directly parse JSON body
+    const parsedBody = await req.json();
 
     // Validate against Zod schema
     const { orgId, key, content, contentType } = uploadSchema.parse(parsedBody);
