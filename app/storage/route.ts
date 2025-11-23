@@ -4,13 +4,21 @@ import { createS3Client, getOrgBucketName } from '@/lib/minio';
 import { CreateBucketCommand, HeadBucketCommand, PutObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { logger } from '@/lib/logger';
 
+
 export const config = {
   api: {
     bodyParser: {
-      sizeLimit: '100mb',
+      sizeLimit: '100mb', // Keep large body limit
     },
   },
 };
+
+const uploadSchema = z.object({
+  orgId: z.string().min(1),
+  key: z.string().min(1),
+  content: z.string().min(1),
+  contentType: z.string().optional(),
+});
 
 /**
  * GET /api/storage
@@ -34,21 +42,18 @@ export async function GET(req: Request) {
   return NextResponse.json({ bucket, objects: (listed.Contents || []).map(o => ({ key: o.Key, size: o.Size })) });
 }
 
+
 /**
  * POST /api/storage
  * Why: Uploads a small text blob into the org-specific bucket.
  */
-const uploadSchema = z.object({ 
-  orgId: z.string().min(1), 
-  key: z.string().min(1), 
-  content: z.string().min(1),
-  contentType: z.string().optional(),
-});
-
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
-    const { orgId, key, content, contentType } = uploadSchema.parse(body);
+    // Directly parse JSON body
+    const parsedBody = await req.json();
+
+    // Validate against Zod schema
+    const { orgId, key, content, contentType } = uploadSchema.parse(parsedBody);
 
     await logger.info(`POST /storage orgId=${orgId} key=${key}`);
 
@@ -58,7 +63,7 @@ export async function POST(req: Request) {
 
     const buffer = Buffer.from(content, 'base64');
 
-    // Basic MP4 header check:
+    // Basic MP4 container signature check
     if (buffer.slice(4, 8).toString('utf-8') !== 'ftyp') {
       return NextResponse.json({ error: 'Uploaded file is not a valid MP4 container' }, { status: 400 });
     }
@@ -66,14 +71,13 @@ export async function POST(req: Request) {
     const s3 = createS3Client();
     const bucket = getOrgBucketName(orgId);
 
-    // Ensure bucket exists:
+    // Ensure bucket exists
     try {
       await s3.send(new HeadBucketCommand({ Bucket: bucket }));
-    } catch (err) {
+    } catch {
       await s3.send(new CreateBucketCommand({ Bucket: bucket }));
     }
 
-    // Upload video:
     await s3.send(new PutObjectCommand({
       Bucket: bucket,
       Key: key,
@@ -87,7 +91,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ bucket, key, status: 'uploaded', url: minioUrl }, { status: 201 });
 
   } catch (error: any) {
-    await logger.error(`Upload failed: ${error}`);
-    return NextResponse.json({ error: `Upload failed: ${error.message}` }, { status: 500 });
+    await logger.error(`Upload failed: ${error.message || error}`);
+    return NextResponse.json({ error: `Upload failed: ${error.message || error}` }, { status: 500 });
   }
 }
