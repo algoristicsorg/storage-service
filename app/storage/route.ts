@@ -4,6 +4,14 @@ import { createS3Client, getOrgBucketName } from '@/lib/minio';
 import { CreateBucketCommand, HeadBucketCommand, PutObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { logger } from '@/lib/logger';
 
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: '100mb',
+    },
+  },
+};
+
 /**
  * GET /api/storage
  * Why: Lists objects for an organization to support content management.
