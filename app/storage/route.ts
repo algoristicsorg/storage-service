@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { createS3Client, getOrgBucketName } from '@/lib/minio';
-import { CreateBucketCommand, HeadBucketCommand, PutObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { CreateBucketCommand, HeadBucketCommand, PutObjectCommand, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
 import { logger } from '@/lib/logger';
 
 
@@ -21,19 +21,37 @@ const uploadSchema = z.object({
 
 
 export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const orgId = searchParams.get('orgId');
-  if (!orgId) return NextResponse.json({ error: 'orgId required' }, { status: 400 });
-  await logger.info(`GET /api/storage orgId=${orgId}`);
-  const s3 = createS3Client();
-  const bucket = getOrgBucketName(orgId);
   try {
-    await s3.send(new HeadBucketCommand({ Bucket: bucket }));
-  } catch {
-    try { await s3.send(new CreateBucketCommand({ Bucket: bucket })); } catch {}
+    const { searchParams } = new URL(req.url);
+    const videoUrl = searchParams.get('url'); // Use 'url' param in query string
+    if (!videoUrl) {
+      return NextResponse.json({ error: 'url query parameter is required' }, { status: 400 });
+    }
+
+    // Parse bucket and key from plain URL
+    const urlObj = new URL(videoUrl);
+    const bucket = urlObj.pathname.split('/')[1];
+    const key = urlObj.pathname.split('/').slice(2).join('/');
+
+    const s3 = createS3Client();
+
+    // Get object stream from MinIO/S3 using GetObjectCommand
+    const command = new GetObjectCommand({ Bucket: bucket, Key: key });
+    const response = await s3.send(command);
+
+    // Stream video data in response with appropriate headers
+    return new NextResponse(response.Body as any, {
+      headers: {
+        'Content-Type': 'video/mp4',
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
+
+  } catch (error: any) {
+    // Log error and respond with JSON error
+    await logger.error(`Error streaming video: ${error.message || error}`);
+    return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
   }
-  const listed = await s3.send(new ListObjectsV2Command({ Bucket: bucket }));
-  return NextResponse.json({ bucket, objects: (listed.Contents || []).map(o => ({ key: o.Key, size: o.Size })) });
 }
 
 
