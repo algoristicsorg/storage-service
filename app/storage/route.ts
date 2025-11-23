@@ -20,39 +20,48 @@ const uploadSchema = z.object({
  */
 
 
-export async function GET(req: Request) {
-  try {
-    const { searchParams } = new URL(req.url);
-    const videoUrl = searchParams.get('url'); // Use 'url' param in query string
-    if (!videoUrl) {
-      return NextResponse.json({ error: 'url query parameter is required' }, { status: 400 });
-    }
+// export async function GET(req: Request) {
+//   try {
+//     const { searchParams } = new URL(req.url);
+//     const videoUrl = searchParams.get('url'); // Use 'url' param in query string
+//     if (!videoUrl) {
+//       return NextResponse.json({ error: 'url query parameter is required' }, { status: 400 });
+//     }
 
-    // Parse bucket and key from plain URL
-    const urlObj = new URL(videoUrl);
-    const bucket = urlObj.pathname.split('/')[1];
-    const key = urlObj.pathname.split('/').slice(2).join('/');
+//     // Parse URL in format: ${minioEndpoint}/${bucket}/${encodeURIComponent(key)}
+//     // Example: http://localhost:9000/org-abc-bucket/video%20file.mp4
+//     const urlObj = new URL(videoUrl);
+//     const pathParts = urlObj.pathname.split('/').filter(Boolean); // Remove empty strings
+    
+//     if (pathParts.length < 2) {
+//       return NextResponse.json({ error: 'Invalid URL format. Expected: endpoint/bucket/key' }, { status: 400 });
+//     }
 
-    const s3 = createS3Client();
+//     const bucket = pathParts[0];
+//     const key = decodeURIComponent(pathParts.slice(1).join('/')); // Decode the key
 
-    // Get object stream from MinIO/S3 using GetObjectCommand
-    const command = new GetObjectCommand({ Bucket: bucket, Key: key });
-    const response = await s3.send(command);
+//     await logger.info(`GET /storage bucket=${bucket} key=${key}`);
 
-    // Stream video data in response with appropriate headers
-    return new NextResponse(response.Body as any, {
-      headers: {
-        'Content-Type': 'video/mp4',
-        'Access-Control-Allow-Origin': '*',
-      },
-    });
+//     const s3 = createS3Client();
 
-  } catch (error: any) {
-    // Log error and respond with JSON error
-    await logger.error(`Error streaming video: ${error.message || error}`);
-    return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
-  }
-}
+//     // Get object stream from MinIO/S3 using GetObjectCommand
+//     const command = new GetObjectCommand({ Bucket: bucket, Key: key });
+//     const response = await s3.send(command);
+
+//     // Stream video data in response with appropriate headers
+//     return new NextResponse(response.Body as any, {
+//       headers: {
+//         'Content-Type': 'video/mp4',
+//         'Access-Control-Allow-Origin': '*',
+//       },
+//     });
+
+//   } catch (error: any) {
+//     // Log error and respond with JSON error
+//     await logger.error(`Error streaming video: ${error.message || error}`);
+//     return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
+//   }
+// }
 
 
 /**
