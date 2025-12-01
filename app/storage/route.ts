@@ -1,11 +1,14 @@
-import { NextResponse } from 'next/server';
-import { z } from 'zod';
-import { createS3Client, getOrgBucketName } from '@/lib/minio';
-import { CreateBucketCommand, HeadBucketCommand, PutObjectCommand, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3';
-import { logger } from '@/lib/logger';
-
-
-
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { createS3Client, getOrgBucketName } from "@/lib/minio";
+import {
+  CreateBucketCommand,
+  HeadBucketCommand,
+  PutObjectCommand,
+  ListObjectsV2Command,
+  GetObjectCommand,
+} from "@aws-sdk/client-s3";
+import { logger } from "@/lib/logger";
 
 const uploadSchema = z.object({
   orgId: z.string().min(1),
@@ -19,7 +22,6 @@ const uploadSchema = z.object({
  * Why: Lists objects for an organization to support content management.
  */
 
-
 // export async function GET(req: Request) {
 //   try {
 //     const { searchParams } = new URL(req.url);
@@ -32,7 +34,7 @@ const uploadSchema = z.object({
 //     // Example: http://localhost:9000/org-abc-bucket/video%20file.mp4
 //     const urlObj = new URL(videoUrl);
 //     const pathParts = urlObj.pathname.split('/').filter(Boolean); // Remove empty strings
-    
+
 //     if (pathParts.length < 2) {
 //       return NextResponse.json({ error: 'Invalid URL format. Expected: endpoint/bucket/key' }, { status: 400 });
 //     }
@@ -63,7 +65,6 @@ const uploadSchema = z.object({
 //   }
 // }
 
-
 /**
  * POST /api/storage
  * Why: Uploads a small text blob into the org-specific bucket.
@@ -77,16 +78,41 @@ export async function POST(req: Request) {
     const { orgId, key, content, contentType } = uploadSchema.parse(parsedBody);
 
     await logger.info(`POST /storage orgId=${orgId} key=${key}`);
-
-    if (!contentType || contentType.toLowerCase() !== 'video/mp4') {
-      return NextResponse.json({ error: 'Only video/mp4 content type allowed' }, { status: 400 });
+    if (
+      !contentType ||
+      !["video/mp4", "text/csv", "application/pdf"].includes(
+        contentType.toLowerCase()
+      )
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Only video/mp4, text/csv, or application/pdf content types allowed",
+        },
+        { status: 400 }
+      );
     }
 
-    const buffer = Buffer.from(content, 'base64');
+    const buffer = Buffer.from(content, "base64");
+    const signature = buffer.slice(0, 8);
 
-    // Basic MP4 container signature check
-    if (buffer.slice(4, 8).toString('utf-8') !== 'ftyp') {
-      return NextResponse.json({ error: 'Uploaded file is not a valid MP4 container' }, { status: 400 });
+    // MP4: bytes 4-8 == 'ftyp'
+    const isMp4 = buffer.slice(4, 8).toString("utf-8") === "ftyp";
+
+    // CSV: check if first few bytes are text starting with typical CSV characters (letters/digits/quotes, commas, newlines)
+    // A simple heuristic: check ASCII printable chars and presence of commas/newlines in first 100 bytes
+    const textSample = buffer.slice(0, 100).toString("utf-8");
+    const isCsv =
+      /^[\w",;\n\r\s\-]+$/.test(textSample) && textSample.includes(",");
+
+    // PDF: starts with '%PDF-' signature
+    const isPdf = signature.slice(0, 5).toString("utf-8") === "%PDF-";
+
+    if (!isMp4 && !isCsv && !isPdf) {
+      return NextResponse.json(
+        { error: "Uploaded file is not a valid MP4, CSV, or PDF" },
+        { status: 400 }
+      );
     }
 
     const s3 = createS3Client();
@@ -99,20 +125,28 @@ export async function POST(req: Request) {
       await s3.send(new CreateBucketCommand({ Bucket: bucket }));
     }
 
-    await s3.send(new PutObjectCommand({
-      Bucket: bucket,
-      Key: key,
-      Body: buffer,
-      ContentType: 'video/mp4',
-    }));
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: buffer,
+        ContentType: contentType,
+      })
+    );
 
-    const minioEndpoint = process.env.EXTERNAL_MINIO_ENDPOINT || 'http://localhost:9000';
+    const minioEndpoint =
+      process.env.EXTERNAL_MINIO_ENDPOINT || "http://localhost:9000";
     const minioUrl = `${minioEndpoint}/${bucket}/${encodeURIComponent(key)}`;
 
-    return NextResponse.json({ bucket, key, status: 'uploaded', url: minioUrl }, { status: 201 });
-
+    return NextResponse.json(
+      { bucket, key, status: "uploaded", url: minioUrl },
+      { status: 201 }
+    );
   } catch (error: any) {
     await logger.error(`Upload failed: ${error.message || error}`);
-    return NextResponse.json({ error: `Upload failed: ${error.message || error}` }, { status: 500 });
+    return NextResponse.json(
+      { error: `Upload failed: ${error.message || error}` },
+      { status: 500 }
+    );
   }
 }
