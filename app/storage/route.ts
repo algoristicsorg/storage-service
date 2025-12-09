@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, NextRequest } from "next/server";
 import { z } from "zod";
 import { createS3Client, getOrgBucketName } from "@/lib/minio";
 import {
@@ -9,6 +9,10 @@ import {
   GetObjectCommand,
 } from "@aws-sdk/client-s3";
 import { logger } from "@/lib/logger";
+import { validateCsvFile } from "@/lib/csv-validator";
+import { query } from "@/lib/db";
+import { randomUUID } from "crypto";
+import { getUserFromToken } from "@/lib/auth";
 
 const uploadSchema = z.object({
   orgId: z.string().min(1),
@@ -68,10 +72,25 @@ const uploadSchema = z.object({
 /**
  * POST /api/storage
  * Why: Uploads a small text blob into the org-specific bucket.
+ * For CSV files, creates a background processing job.
  */
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
-    // Directly parse JSON body
+    // 1. Authentication and Authorization
+    let user;
+    try {
+      user = await getUserFromToken(req);
+    } catch (authError: any) {
+      await logger.error(`Authentication failed: ${authError.message || authError}`);
+      return NextResponse.json(
+        { error: "Unauthorized: Invalid or missing Bearer token" },
+        { status: 401 }
+      );
+    }
+
+    const createdBy = user.userId;
+
+    // 2. Parse request body
     const parsedBody = await req.json();
 
     // Validate against Zod schema
@@ -102,8 +121,10 @@ export async function POST(req: Request) {
     // CSV: check if first few bytes are text starting with typical CSV characters (letters/digits/quotes, commas, newlines)
     // A simple heuristic: check ASCII printable chars and presence of commas/newlines in first 100 bytes
     const textSample = buffer.slice(0, 100).toString("utf-8");
-    const isCsv =
-      /^[\w",;\n\r\s\-]+$/.test(textSample) && textSample.includes(",");
+    // CSV: Check file extension and content type instead of content heuristics
+    const isCsv = 
+      contentType.toLowerCase() === "text/csv" || 
+      key.toLowerCase().endsWith(".csv");
 
     // PDF: starts with '%PDF-' signature
     const isPdf = signature.slice(0, 5).toString("utf-8") === "%PDF-";
@@ -113,6 +134,20 @@ export async function POST(req: Request) {
         { error: "Uploaded file is not a valid MP4, CSV, or PDF" },
         { status: 400 }
       );
+    }
+
+    // Additional CSV validation
+    if (isCsv) {
+      const csvValidation = validateCsvFile(buffer, key);
+      if (!csvValidation.isValid) {
+        return NextResponse.json(
+          { 
+            error: "CSV validation failed",
+            details: csvValidation.error 
+          },
+          { status: 400 }
+        );
+      }
     }
 
     const s3 = createS3Client();
@@ -137,6 +172,67 @@ export async function POST(req: Request) {
     const minioEndpoint =
       process.env.EXTERNAL_MINIO_ENDPOINT || "http://localhost:9000";
     const minioUrl = `${minioEndpoint}/${bucket}/${encodeURIComponent(key)}`;
+
+    // If CSV file, create a processing job
+    if (isCsv) {
+      const csvValidation = validateCsvFile(buffer, key);//
+      const jobId = randomUUID();
+      
+      try {
+        await query(
+          `INSERT INTO csv_processing_jobs 
+           (job_id, organization_id, file_name, file_size, total_records, success_count, failure_count, csv_status, errors, created_by, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
+          [
+            jobId,
+            orgId,
+            key,
+            buffer.length,
+            csvValidation.recordCount || 0,
+            0,
+            0,
+            'queued',
+            JSON.stringify([]),
+            createdBy
+          ]
+        );
+
+        await logger.info(
+          `Created CSV processing job ${jobId} for file ${key} with ${csvValidation.recordCount} records`
+        );
+
+        return NextResponse.json(
+          {
+            bucket,
+            key,
+            status: "uploaded",
+            url: minioUrl,
+            csvProcessing: {
+              jobId,
+              recordCount: csvValidation.recordCount,
+              headers: csvValidation.headers,
+              status: "queued"
+            }
+          },
+          { status: 201 }
+        );
+      } catch (dbError: any) {
+        const errorMsg = dbError instanceof Error ? dbError.message : String(dbError);
+        await logger.error(`Failed to create CSV processing job: ${errorMsg}`);
+        // Still return success for upload, but note job creation failed
+        return NextResponse.json(
+          {
+            bucket,
+            key,
+            status: "uploaded",
+            url: minioUrl,
+            warning: "File uploaded but CSV processing job creation failed",
+            error_details: errorMsg
+          },
+          { status: 201 }
+        );
+      }
+    }
 
     return NextResponse.json(
       { bucket, key, status: "uploaded", url: minioUrl },
