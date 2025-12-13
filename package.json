@@ -9,8 +9,11 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.637.0",
+    "@types/pg": "^8.15.6",
+    "csv-parser": "^3.2.0",
     "jose": "^6.1.0",
     "next": "14.2.33",
+    "pg": "^8.16.3",
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "zod": "3.23.8"
