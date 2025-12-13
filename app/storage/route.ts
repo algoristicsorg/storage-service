@@ -178,6 +178,8 @@ export async function POST(req: NextRequest) {
       const csvValidation = validateCsvFile(buffer, key);//
       const jobId = randomUUID();
       
+      console.log(`[Storage Upload] Creating CSV job: jobId=${jobId}, orgId=${orgId}, file=${key}, records=${csvValidation.recordCount}`);
+      
       try {
         await query(
           `INSERT INTO csv_processing_jobs 
@@ -196,6 +198,8 @@ export async function POST(req: NextRequest) {
             createdBy
           ]
         );
+
+        console.log(`[Storage Upload] ✅ CSV job created successfully: ${jobId}`);
 
         await logger.info(
           `Created CSV processing job ${jobId} for file ${key} with ${csvValidation.recordCount} records`
