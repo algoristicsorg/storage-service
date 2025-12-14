@@ -15,7 +15,7 @@ import { randomUUID } from "crypto";
 import { getUserFromToken } from "@/lib/auth";
 
 const uploadSchema = z.object({
-  orgId: z.string().min(1),
+  orgId: z.string().min(1).optional(),
   key: z.string().min(1),
   content: z.string().min(1),
   contentType: z.string().optional(),
@@ -80,6 +80,8 @@ export async function POST(req: NextRequest) {
     let user;
     try {
       user = await getUserFromToken(req);
+      
+
     } catch (authError: any) {
       await logger.error(`Authentication failed: ${authError.message || authError}`);
       return NextResponse.json(
@@ -89,6 +91,7 @@ export async function POST(req: NextRequest) {
     }
 
     const createdBy = user.userId;
+    const organizationId = user.organizationId;
 
     // 2. Parse request body
     const parsedBody = await req.json();
@@ -151,7 +154,7 @@ export async function POST(req: NextRequest) {
     }
 
     const s3 = createS3Client();
-    const bucket = getOrgBucketName(orgId);
+    const bucket = getOrgBucketName(orgId || organizationId);
 
     // Ensure bucket exists
     try {
@@ -187,7 +190,7 @@ export async function POST(req: NextRequest) {
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
           [
             jobId,
-            orgId,
+            orgId || organizationId,
             key,
             buffer.length,
             csvValidation.recordCount || 0,
