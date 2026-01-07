@@ -446,3 +446,5 @@ Thumbs.db
 *.tmp
 *.bak
 
+# Coverage reports
+coverage/
