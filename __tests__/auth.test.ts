@@ -1,132 +1,114 @@
-/**
- * @jest-environment node
- */
+import { getUserFromToken } from '../lib/auth';
+import { jwtVerify } from 'jose';
+import { NextRequest } from 'next/server';
 
-// 1. Mock 'jose' BEFORE importing the function to test
-// This bypasses the ESM syntax issues and lets us control verification results
+// --- 1. Bypass 'jose' ESM Syntax Errors ---
+// We mock the library so Jest doesn't try to parse the real ESM files.
 jest.mock('jose', () => ({
   jwtVerify: jest.fn(),
 }));
 
-import { getUserFromToken } from '@/lib/auth'; // Adjust path if needed
-import { NextRequest } from 'next/server';
-import { jwtVerify } from 'jose';
-
-describe('Auth Helper: getUserFromToken', () => {
-  const mockJwtVerify = jwtVerify as jest.Mock;
-  const originalEnv = process.env;
+describe('getUserFromToken', () => {
+  const MOCK_SECRET = 'test_secret_key';
+  const DEFAULT_SECRET = 'dev_jwt_secret_change_me';
+  
+  // Store original env var to restore later
+  const originalSecret = process.env.JWT_SECRET;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    process.env = { ...originalEnv };
-    // Set a predictable secret for the test
-    process.env.JWT_SECRET = 'test-secret';
+    jest.resetModules();
+    // Safely set the specific key (mutation is allowed, reassignment of process.env is not)
+    process.env.JWT_SECRET = MOCK_SECRET;
   });
 
   afterAll(() => {
-    process.env = originalEnv;
+    // Restore the environment variable to its original state
+    process.env.JWT_SECRET = originalSecret;
   });
 
-  // Helper to create a NextRequest with headers
-  const createRequestWithToken = (token?: string) => {
-    const headers = new Headers();
-    if (token !== undefined) {
-      // If token is empty string, we send empty header, else valid Bearer
-      headers.set('authorization', token ? `Bearer ${token}` : '');
-    }
-    // If token is explicitly null/undefined in our helper, we don't set header
-    if (token === undefined) {
-      // do nothing, no header
-    }
-    
-    return new NextRequest('http://localhost:3000', { headers });
+  // --- Helper: Create Mock Request ---
+  // We cast as unknown as NextRequest to satisfy Typescript without mocking complex internals
+  const createMockRequest = (cookieValue: string | null) => {
+    return {
+      cookies: {
+        get: jest.fn((name) => {
+          if (name === 'auth_token' && cookieValue) {
+            return { value: cookieValue };
+          }
+          return undefined;
+        }),
+      },
+    } as unknown as NextRequest;
   };
 
-  test('Success: Returns user data when token is valid', async () => {
-    // Arrange
-    const mockPayload = {
-      sub: 'user-123',
-      organizationId: 'org-1',
-      email: 'test@example.com',
-      role: 'ADMIN',
-    };
-    
-    // Mock jwtVerify to resolve successfully with our payload
-    mockJwtVerify.mockResolvedValue({ payload: mockPayload });
+  // --- Test Cases ---
 
-    const req = createRequestWithToken('valid.jwt.token');
+  it('should return user details when the token is valid', async () => {
+    // 1. Mock jwtVerify to return a success payload
+    (jwtVerify as jest.Mock).mockResolvedValue({
+      payload: {
+        sub: 'user_123',
+        organizationId: 'org_999',
+        email: 'test@example.com',
+        role: 'ADMIN',
+      },
+    });
 
-    // Act
-    const result = await getUserFromToken(req);
+    // 2. Create request with a token
+    const req = createMockRequest('valid_token_string');
 
-    // Assert
-    expect(result).toEqual({
-      userId: 'user-123',
-      organizationId: 'org-1',
+    // 3. Execute function
+    const user = await getUserFromToken(req);
+
+    // 4. Assertions
+    expect(user).toEqual({
+      userId: 'user_123',
+      organizationId: 'org_999',
       email: 'test@example.com',
       role: 'ADMIN',
     });
-    
-    // Check that we called verify with the token and the secret
-    expect(mockJwtVerify).toHaveBeenCalledWith(
-      'valid.jwt.token', 
-      expect.any(Uint8Array) // The secret is encoded to Uint8Array
-    );
+
+    // Verify it used the correct secret from env
+    const expectedSecretBytes = new TextEncoder().encode(MOCK_SECRET);
+    expect(jwtVerify).toHaveBeenCalledWith('valid_token_string', expectedSecretBytes);
   });
 
-  test('Success: Uses default secret if env var is missing', async () => {
-    // Arrange
-    delete process.env.JWT_SECRET; // Remove env var
-    mockJwtVerify.mockResolvedValue({ payload: { sub: 'u1' } });
+  it('should throw "Missing authentication token" if the cookie is missing', async () => {
+    // 1. Create request with NO cookie
+    const req = createMockRequest(null);
 
-    const req = createRequestWithToken('some.token');
+    // 2. Expect error
+    await expect(getUserFromToken(req)).rejects.toThrow('Missing authentication token');
+    
+    // Ensure we didn't waste resources trying to verify undefined
+    expect(jwtVerify).not.toHaveBeenCalled();
+  });
 
-    // Act
+  it('should throw "Invalid or expired token" if verification fails', async () => {
+    // 1. Mock jwtVerify to throw an error (simulating expired/tampered)
+    (jwtVerify as jest.Mock).mockRejectedValue(new Error('Signature verification failed'));
+
+    // 2. Create request
+    const req = createMockRequest('bad_token');
+
+    // 3. Expect wrapped error
+    await expect(getUserFromToken(req)).rejects.toThrow('Invalid or expired token');
+  });
+
+  it('should fallback to default secret if JWT_SECRET env var is missing', async () => {
+    // 1. Delete the specific key temporarily
+    delete process.env.JWT_SECRET;
+
+    // 2. Mock success
+    (jwtVerify as jest.Mock).mockResolvedValue({ payload: { sub: 'u1' } });
+
+    // 3. Execute
+    const req = createMockRequest('token');
     await getUserFromToken(req);
 
-    // Assert
-    // Verify we used the fallback 'dev_jwt_secret_change_me' encoded
-    const expectedFallbackSecret = new TextEncoder().encode('dev_jwt_secret_change_me');
-    expect(mockJwtVerify).toHaveBeenCalledWith(
-      'some.token',
-      expectedFallbackSecret
-    );
-  });
-
-  test('Error: Throws "Missing Bearer token" if authorization header is missing', async () => {
-    const req = new NextRequest('http://localhost:3000'); // No headers
-    
-    await expect(getUserFromToken(req))
-      .rejects
-      .toThrow('Missing Bearer token');
-  });
-
-  test('Error: Throws "Missing Bearer token" if header exists but has no token', async () => {
-    const req = createRequestWithToken(''); // Header is ""
-    
-    await expect(getUserFromToken(req))
-      .rejects
-      .toThrow('Missing Bearer token');
-  });
-
-  test('Error: Throws "Missing Bearer token" if header does not start with Bearer', async () => {
-    const req = new NextRequest('http://localhost:3000', {
-        headers: { 'authorization': 'Basic credentials' } 
-    });
-    
-    await expect(getUserFromToken(req))
-      .rejects
-      .toThrow('Missing Bearer token');
-  });
-
-  test('Error: Throws "Invalid token" if jwtVerify fails', async () => {
-    // Arrange
-    mockJwtVerify.mockRejectedValue(new Error('Signature verification failed'));
-    const req = createRequestWithToken('bad.token');
-
-    // Act & Assert
-    await expect(getUserFromToken(req))
-      .rejects
-      .toThrow('Invalid token');
+    // 4. Verify it used the hardcoded default secret
+    const expectedBytes = new TextEncoder().encode(DEFAULT_SECRET);
+    expect(jwtVerify).toHaveBeenCalledWith('token', expectedBytes);
   });
 });
