@@ -102,14 +102,14 @@ export async function POST(req: NextRequest) {
     await logger.info(`POST /storage orgId=${orgId} key=${key}`);
     if (
       !contentType ||
-      !["video/mp4", "text/csv", "application/pdf"].includes(
+      !["video/mp4", "text/csv", "application/pdf", "image/jpeg", "image/png", "image/svg+xml"].includes(
         contentType.toLowerCase()
       )
     ) {
       return NextResponse.json(
         {
           error:
-            "Only video/mp4, text/csv, or application/pdf content types allowed",
+            "Only video/mp4, text/csv, application/pdf, image/jpeg, image/png, or image/svg+xml content types allowed",
         },
         { status: 400 }
       );
@@ -121,9 +121,6 @@ export async function POST(req: NextRequest) {
     // MP4: bytes 4-8 == 'ftyp'
     const isMp4 = buffer.slice(4, 8).toString("utf-8") === "ftyp";
 
-    // CSV: check if first few bytes are text starting with typical CSV characters (letters/digits/quotes, commas, newlines)
-    // A simple heuristic: check ASCII printable chars and presence of commas/newlines in first 100 bytes
-    const textSample = buffer.slice(0, 100).toString("utf-8");
     // CSV: Check file extension and content type instead of content heuristics
     const isCsv = 
       contentType.toLowerCase() === "text/csv" || 
@@ -132,9 +129,22 @@ export async function POST(req: NextRequest) {
     // PDF: starts with '%PDF-' signature
     const isPdf = signature.slice(0, 5).toString("utf-8") === "%PDF-";
 
-    if (!isMp4 && !isCsv && !isPdf) {
+    // JPEG: starts with FF D8 FF
+    const isJpeg = 
+      buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF;
+
+    // PNG: starts with 89 50 4E 47 (89 P N G)
+    const isPng = 
+      buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47;
+
+    // SVG: XML-based, check for common SVG indicators
+    const isSvg = 
+      (contentType.toLowerCase() === "image/svg+xml" || key.toLowerCase().endsWith(".svg")) &&
+      buffer.toString("utf-8", 0, 200).includes("<svg");
+
+    if (!isMp4 && !isCsv && !isPdf && !isJpeg && !isPng && !isSvg) {
       return NextResponse.json(
-        { error: "Uploaded file is not a valid MP4, CSV, or PDF" },
+        { error: "Uploaded file is not a valid MP4, CSV, PDF, JPEG, PNG, or SVG" },
         { status: 400 }
       );
     }
