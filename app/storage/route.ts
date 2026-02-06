@@ -13,19 +13,19 @@ import { validateCsvFile } from "@/lib/csv-validator";
 import { query } from "@/lib/db";
 import { randomUUID } from "crypto";
 import { getUserFromToken } from "@/lib/auth";
-
+ 
 const uploadSchema = z.object({
   orgId: z.string().min(1).optional(),
   key: z.string().min(1),
   content: z.string().min(1),
   contentType: z.string().optional(),
 });
-
+ 
 /**
  * GET /api/storage
  * Why: Lists objects for an organization to support content management.
  */
-
+ 
 // export async function GET(req: Request) {
 //   try {
 //     const { searchParams } = new URL(req.url);
@@ -33,27 +33,27 @@ const uploadSchema = z.object({
 //     if (!videoUrl) {
 //       return NextResponse.json({ error: 'url query parameter is required' }, { status: 400 });
 //     }
-
+ 
 //     // Parse URL in format: ${minioEndpoint}/${bucket}/${encodeURIComponent(key)}
 //     // Example: http://localhost:9000/org-abc-bucket/video%20file.mp4
 //     const urlObj = new URL(videoUrl);
 //     const pathParts = urlObj.pathname.split('/').filter(Boolean); // Remove empty strings
-
+ 
 //     if (pathParts.length < 2) {
 //       return NextResponse.json({ error: 'Invalid URL format. Expected: endpoint/bucket/key' }, { status: 400 });
 //     }
-
+ 
 //     const bucket = pathParts[0];
 //     const key = decodeURIComponent(pathParts.slice(1).join('/')); // Decode the key
-
+ 
 //     await logger.info(`GET /storage bucket=${bucket} key=${key}`);
-
+ 
 //     const s3 = createS3Client();
-
+ 
 //     // Get object stream from MinIO/S3 using GetObjectCommand
 //     const command = new GetObjectCommand({ Bucket: bucket, Key: key });
 //     const response = await s3.send(command);
-
+ 
 //     // Stream video data in response with appropriate headers
 //     return new NextResponse(response.Body as any, {
 //       headers: {
@@ -61,14 +61,14 @@ const uploadSchema = z.object({
 //         'Access-Control-Allow-Origin': '*',
 //       },
 //     });
-
+ 
 //   } catch (error: any) {
 //     // Log error and respond with JSON error
 //     await logger.error(`Error streaming video: ${error.message || error}`);
 //     return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
 //   }
 // }
-
+ 
 /**
  * POST /api/storage
  * Why: Uploads a small text blob into the org-specific bucket.
@@ -80,8 +80,8 @@ export async function POST(req: NextRequest) {
     let user;
     try {
       user = await getUserFromToken(req);
-      
-
+     
+ 
     } catch (authError: any) {
       await logger.error(`Authentication failed: ${authError.message || authError}`);
       return NextResponse.json(
@@ -89,16 +89,16 @@ export async function POST(req: NextRequest) {
         { status: 401 }
       );
     }
-
+ 
     const createdBy = user.userId;
     const organizationId = user.organizationId;
-
+ 
     // 2. Parse request body
     const parsedBody = await req.json();
-
+ 
     // Validate against Zod schema
     const { orgId, key, content, contentType } = uploadSchema.parse(parsedBody);
-
+ 
     await logger.info(`POST /storage orgId=${orgId} key=${key}`);
     if (
       !contentType ||
@@ -114,65 +114,97 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-
-    const buffer = Buffer.from(content, "base64");
-    const signature = buffer.slice(0, 8);
-
-    // MP4: bytes 4-8 == 'ftyp'
-    const isMp4 = buffer.slice(4, 8).toString("utf-8") === "ftyp";
-
-    // CSV: Check file extension and content type instead of content heuristics
-    const isCsv = 
-      contentType.toLowerCase() === "text/csv" || 
-      key.toLowerCase().endsWith(".csv");
-
-    // PDF: starts with '%PDF-' signature
-    const isPdf = signature.slice(0, 5).toString("utf-8") === "%PDF-";
-
-    // JPEG: starts with FF D8 FF
-    const isJpeg = 
-      buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF;
-
-    // PNG: starts with 89 50 4E 47 (89 P N G)
-    const isPng = 
-      buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47;
-
-    // SVG: XML-based, check for common SVG indicators
-    const isSvg = 
-      (contentType.toLowerCase() === "image/svg+xml" || key.toLowerCase().endsWith(".svg")) &&
-      buffer.toString("utf-8", 0, 200).includes("<svg");
-
-    if (!isMp4 && !isCsv && !isPdf && !isJpeg && !isPng && !isSvg) {
+    if (
+      !contentType ||
+      !["video/mp4", "text/csv", "application/pdf", "image/jpeg", "image/png", "image/svg+xml", "audio/mpeg", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"].includes(
+      contentType.toLowerCase()
+      )
+    ) {
       return NextResponse.json(
-        { error: "Uploaded file is not a valid MP4, CSV, PDF, JPEG, PNG, or SVG" },
-        { status: 400 }
+      {
+        error:
+        "Only video/mp4, text/csv, application/pdf, image/jpeg, image/png, image/svg+xml, audio/mpeg, application/msword, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.ms-excel, or application/vnd.openxmlformats-officedocument.spreadsheetml.sheet content types allowed",
+      },
+      { status: 400 }
       );
     }
-
+    const buffer = Buffer.from(content, "base64");
+    const signature = buffer.slice(0, 8);
+ 
+    // MP4: bytes 4-8 == 'ftyp'
+    const isMp4 = buffer.slice(4, 8).toString("utf-8") === "ftyp";
+ 
+    // MP3: starts with FF FB or FF FA (MPEG frame sync) or 'ID3' tag
+    const isMp3 =
+      (buffer[0] === 0xFF && (buffer[1] === 0xFB || buffer[1] === 0xFA)) ||
+      buffer.slice(0, 3).toString("utf-8") === "ID3";
+ 
+    // CSV: Check file extension and content type instead of content heuristics
+    const isCsv =
+      contentType.toLowerCase() === "text/csv" ||
+      key.toLowerCase().endsWith(".csv");
+ 
+    // PDF: starts with '%PDF-' signature
+    const isPdf = signature.slice(0, 5).toString("utf-8") === "%PDF-";
+ 
+    // JPEG: starts with FF D8 FF
+    const isJpeg =
+      buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF;
+ 
+    // PNG: starts with 89 50 4E 47 (89 P N G)
+    const isPng =
+      buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47;
+ 
+    // SVG: XML-based, check for common SVG indicators
+    const isSvg =
+      (contentType.toLowerCase() === "image/svg+xml" || key.toLowerCase().endsWith(".svg")) &&
+      buffer.toString("utf-8", 0, 200).includes("<svg");
+ 
+    // DOC/DOCX: Check content type and file extension
+    const isDoc =
+      contentType.toLowerCase() === "application/msword" ||
+      key.toLowerCase().endsWith(".doc");
+ 
+    const isDocx =
+      contentType.toLowerCase() === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      key.toLowerCase().endsWith(".docx");
+ 
+    // XLSX: Check content type and file extension
+    const isXlsx =
+      contentType.toLowerCase() === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+      key.toLowerCase().endsWith(".xlsx");
+ 
+    if (!isMp4 && !isMp3 && !isCsv && !isPdf && !isJpeg && !isPng && !isSvg && !isDoc && !isDocx && !isXlsx) {
+      return NextResponse.json(
+      { error: "Uploaded file is not a valid MP4, MP3, CSV, PDF, JPEG, PNG, SVG, DOC, DOCX, or XLSX" },
+      { status: 400 }
+      );
+    }
+ 
     // Additional CSV validation
     if (isCsv) {
       const csvValidation = validateCsvFile(buffer, key);
       if (!csvValidation.isValid) {
         return NextResponse.json(
-          { 
+          {
             error: "CSV validation failed",
-            details: csvValidation.error 
+            details: csvValidation.error
           },
           { status: 400 }
         );
       }
     }
-
+ 
     const s3 = createS3Client();
     const bucket = getOrgBucketName(orgId || organizationId);
-
+ 
     // Ensure bucket exists
     try {
       await s3.send(new HeadBucketCommand({ Bucket: bucket }));
     } catch {
       await s3.send(new CreateBucketCommand({ Bucket: bucket }));
     }
-
+ 
     await s3.send(
       new PutObjectCommand({
         Bucket: bucket,
@@ -181,21 +213,21 @@ export async function POST(req: NextRequest) {
         ContentType: contentType,
       })
     );
-
+ 
     const minioEndpoint =
       process.env.EXTERNAL_MINIO_ENDPOINT || "http://localhost:9000";
     const minioUrl = `${minioEndpoint}/${bucket}/${encodeURIComponent(key)}`;
-
+ 
     // If CSV file, create a processing job
     if (isCsv) {
       const csvValidation = validateCsvFile(buffer, key);//
       const jobId = randomUUID();
-      
+     
       console.log(`[Storage Upload] Creating CSV job: jobId=${jobId}, orgId=${orgId}, file=${key}, records=${csvValidation.recordCount}`);
-      
+     
       try {
         await query(
-          `INSERT INTO csv_processing_jobs 
+          `INSERT INTO csv_processing_jobs
            (job_id, organization_id, file_name, file_size, total_records, success_count, failure_count, csv_status, errors, created_by, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
           [
@@ -211,13 +243,13 @@ export async function POST(req: NextRequest) {
             createdBy
           ]
         );
-
+ 
         console.log(`[Storage Upload] ✅ CSV job created successfully: ${jobId}`);
-
+ 
         await logger.info(
           `Created CSV processing job ${jobId} for file ${key} with ${csvValidation.recordCount} records`
         );
-
+ 
         return NextResponse.json(
           {
             bucket,
@@ -250,7 +282,7 @@ export async function POST(req: NextRequest) {
         );
       }
     }
-
+ 
     return NextResponse.json(
       { bucket, key, status: "uploaded", url: minioUrl },
       { status: 201 }
@@ -263,3 +295,5 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+ 
+ 
