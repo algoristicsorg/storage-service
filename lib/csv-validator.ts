@@ -21,6 +21,12 @@ const REQUIRED_CSV_HEADERS_VARIANT_2: string[] = [
   'studentname',
 ];
 
+// Option set 3: assessment assignment import
+const REQUIRED_CSV_HEADERS_VARIANT_3: string[] = [
+  'assessmentname',
+  'studentname',
+];
+
 export const OPTIONAL_CSV_HEADERS: string[] = [];
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50 MB
@@ -58,7 +64,7 @@ export function validateCsvFile(
     }
 
     // Check if content is text
-    const contentSample = fileBuffer.slice(0, 512).toString('utf-8', 0, 512);
+    const contentSample = fileBuffer.slice(0, 512).toString('utf-8');
 
     const csvContentRegex =
       /^[\p{L}\p{N}\s,"'.;\-_@#$%&()[\]{}+=:/?!~`^|\\]*$/gu;
@@ -78,7 +84,7 @@ export function validateCsvFile(
       };
     }
 
-    // Parse first few lines
+    // Parse lines
     const textContent = fileBuffer.toString('utf-8');
     const lines = textContent.split('\n').filter((line) => line.trim());
 
@@ -89,7 +95,7 @@ export function validateCsvFile(
       };
     }
 
-    // Extract and validate headers
+    // Extract headers
     const headerLine = lines[0];
     const headers = parseCSVLine(headerLine);
 
@@ -102,19 +108,30 @@ export function validateCsvFile(
 
     const normalizedHeaders = headers.map((h) => h.toLowerCase().trim());
 
-    // Check against both header variants
+    // Variant checks
     const hasVariant1 = REQUIRED_CSV_HEADERS_VARIANT_1.every((h) =>
       normalizedHeaders.includes(h),
     );
+
     const hasVariant2 = REQUIRED_CSV_HEADERS_VARIANT_2.every((h) =>
       normalizedHeaders.includes(h),
     );
 
-    if (!hasVariant1 && !hasVariant2) {
+    const hasVariant3 = REQUIRED_CSV_HEADERS_VARIANT_3.every((h) =>
+      normalizedHeaders.includes(h),
+    );
+
+    // ❗ No variant matched
+    if (!hasVariant1 && !hasVariant2 && !hasVariant3) {
       const missingVariant1 = REQUIRED_CSV_HEADERS_VARIANT_1.filter(
         (h) => !normalizedHeaders.includes(h),
       );
+
       const missingVariant2 = REQUIRED_CSV_HEADERS_VARIANT_2.filter(
+        (h) => !normalizedHeaders.includes(h),
+      );
+
+      const missingVariant3 = REQUIRED_CSV_HEADERS_VARIANT_3.filter(
         (h) => !normalizedHeaders.includes(h),
       );
 
@@ -122,41 +139,38 @@ export function validateCsvFile(
         isValid: false,
         error:
           `Missing required CSV headers. ` +
-          `Either provide: [${REQUIRED_CSV_HEADERS_VARIANT_1.join(
-            ', ',
-          )}] (student details) ` +
-          `or: [${REQUIRED_CSV_HEADERS_VARIANT_2.join(
-            ', ',
-          )}] (course & student name). ` +
-          `Missing for variant 1: ${missingVariant1.join(
-            ', ',
-          )}; missing for variant 2: ${missingVariant2.join(', ')}`,
+          `Either provide: [${REQUIRED_CSV_HEADERS_VARIANT_1.join(', ')}] (student details) ` +
+          `or: [${REQUIRED_CSV_HEADERS_VARIANT_2.join(', ')}] (course & student name) ` +
+          `or: [${REQUIRED_CSV_HEADERS_VARIANT_3.join(', ')}] (assessment & student name). ` +
+          `Missing for variant 1: ${missingVariant1.join(', ') || 'none'}; ` +
+          `missing for variant 2: ${missingVariant2.join(', ') || 'none'}; ` +
+          `missing for variant 3: ${missingVariant3.join(', ') || 'none'}`,
       };
     }
 
-    // Determine which variant is used for “known headers” check
-    const activeRequired =
-      hasVariant1 ? REQUIRED_CSV_HEADERS_VARIANT_1 : REQUIRED_CSV_HEADERS_VARIANT_2;
+    // Determine active variant
+    const activeRequired = hasVariant1
+      ? REQUIRED_CSV_HEADERS_VARIANT_1
+      : hasVariant2
+      ? REQUIRED_CSV_HEADERS_VARIANT_2
+      : REQUIRED_CSV_HEADERS_VARIANT_3;
 
     const allValidHeaders = [...activeRequired, ...OPTIONAL_CSV_HEADERS];
+
     const unknownHeaders = normalizedHeaders.filter(
       (h) => !allValidHeaders.includes(h),
     );
 
     if (unknownHeaders.length > 0) {
       logger.warn(
-        `CSV contains unexpected columns: ${unknownHeaders.join(
-          ', ',
-        )}. They will be ignored.`,
+        `CSV contains unexpected columns: ${unknownHeaders.join(', ')}. They will be ignored.`,
       );
     }
 
     const recordCount = lines.length - 1;
 
     logger.info(
-      `CSV validation successful: ${recordCount} records found with headers: ${normalizedHeaders.join(
-        ', ',
-      )}`,
+      `CSV validation successful: ${recordCount} records found with headers: ${normalizedHeaders.join(', ')}`,
     );
 
     return {
