@@ -1,3 +1,4 @@
+// app/api/storage/route.ts
 import { NextResponse, NextRequest } from "next/server";
 import { z } from "zod";
 import { createS3Client, getOrgBucketName } from "@/lib/minio";
@@ -5,112 +6,90 @@ import {
   CreateBucketCommand,
   HeadBucketCommand,
   PutObjectCommand,
-  ListObjectsV2Command,
-  GetObjectCommand,
 } from "@aws-sdk/client-s3";
 import { logger } from "@/lib/logger";
 import { validateCsvFile } from "@/lib/csv-validator";
 import { query } from "@/lib/db";
 import { randomUUID } from "crypto";
 import { getUserFromToken } from "@/lib/auth";
- 
+
+/* ---------------- Schema ---------------- */
 const uploadSchema = z.object({
   orgId: z.string().min(1).optional(),
   key: z.string().min(1),
-  content: z.string().min(1),
-  contentType: z.string().optional(),
+  content: z.string().min(1), // base64
+  contentType: z.string().min(1),
 });
- 
-/**
- * GET /api/storage
- * Why: Lists objects for an organization to support content management.
- */
- 
-// export async function GET(req: Request) {
-//   try {
-//     const { searchParams } = new URL(req.url);
-//     const videoUrl = searchParams.get('url'); // Use 'url' param in query string
-//     if (!videoUrl) {
-//       return NextResponse.json({ error: 'url query parameter is required' }, { status: 400 });
-//     }
- 
-//     // Parse URL in format: ${minioEndpoint}/${bucket}/${encodeURIComponent(key)}
-//     // Example: http://localhost:9000/org-abc-bucket/video%20file.mp4
-//     const urlObj = new URL(videoUrl);
-//     const pathParts = urlObj.pathname.split('/').filter(Boolean); // Remove empty strings
- 
-//     if (pathParts.length < 2) {
-//       return NextResponse.json({ error: 'Invalid URL format. Expected: endpoint/bucket/key' }, { status: 400 });
-//     }
- 
-//     const bucket = pathParts[0];
-//     const key = decodeURIComponent(pathParts.slice(1).join('/')); // Decode the key
- 
-//     await logger.info(`GET /storage bucket=${bucket} key=${key}`);
- 
-//     const s3 = createS3Client();
- 
-//     // Get object stream from MinIO/S3 using GetObjectCommand
-//     const command = new GetObjectCommand({ Bucket: bucket, Key: key });
-//     const response = await s3.send(command);
- 
-//     // Stream video data in response with appropriate headers
-//     return new NextResponse(response.Body as any, {
-//       headers: {
-//         'Content-Type': 'video/mp4',
-//         'Access-Control-Allow-Origin': '*',
-//       },
-//     });
- 
-//   } catch (error: any) {
-//     // Log error and respond with JSON error
-//     await logger.error(`Error streaming video: ${error.message || error}`);
-//     return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
-//   }
-// }
- 
-/**
- * POST /api/storage
- * Why: Uploads a small text blob into the org-specific bucket.
- * For CSV files, creates a background processing job.
- */
+
+/* ---------------- Allowed MIME Types ---------------- */
+const ALLOWED_CONTENT_TYPES = [
+  // Video
+  "video/mp4",
+  "video/webm",
+  "video/ogg",
+
+  // Audio
+  "audio/mpeg",
+  "audio/wav",
+  "audio/ogg",
+
+  // Images
+  "image/jpeg",
+  "image/jpg", // ✅ NEW
+  "image/png",
+  "image/svg+xml",
+  "image/gif",
+  "image/webp",
+
+  // Documents
+  "application/pdf",
+  "text/plain",
+  "application/rtf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+
+  // PowerPoint
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+
+  // Spreadsheets
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+
+  // Data
+  "text/csv",
+  "application/json",
+  "application/xml",
+  "text/xml",
+
+  // SQL
+  "application/sql", // ✅ NEW
+  "text/sql",        // ✅ NEW
+
+  // Archives
+  "application/zip",
+  "application/x-zip-compressed",
+];
+
+/* ---------------- POST /api/storage ---------------- */
 export async function POST(req: NextRequest) {
   try {
-    // 1. Authentication and Authorization
-    let user;
-    try {
-      user = await getUserFromToken(req);
-     
- 
-    } catch (authError: any) {
-      await logger.error(`Authentication failed: ${authError.message || authError}`);
-      return NextResponse.json(
-        { error: "Unauthorized: Invalid or missing Bearer token" },
-        { status: 401 }
-      );
+    /* -------- Auth -------- */
+    const user = await getUserFromToken(req);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
  
     const createdBy = user.userId;
     const organizationId = user.organizationId;
- 
-    // 2. Parse request body
-    const parsedBody = await req.json();
- 
-    // Validate against Zod schema
-    const { orgId, key, content, contentType } = uploadSchema.parse(parsedBody);
- 
-    await logger.info(`POST /storage orgId=${orgId} key=${key}`);
-    if (
-      !contentType ||
-      !["video/mp4", "text/csv", "application/pdf", "image/jpeg", "image/png", "image/svg+xml"].includes(
-        contentType.toLowerCase()
-      )
-    ) {
+
+    /* -------- Parse + Validate -------- */
+    const body = uploadSchema.parse(await req.json());
+    const { orgId, key, content, contentType } = body;
+
+    if (!ALLOWED_CONTENT_TYPES.includes(contentType.toLowerCase())) {
       return NextResponse.json(
-        {
-          error:
-            "Only video/mp4, text/csv, application/pdf, image/jpeg, image/png, or image/svg+xml content types allowed",
-        },
+        { error: "Unsupported content type" },
         { status: 400 }
       );
     }
@@ -130,75 +109,133 @@ export async function POST(req: NextRequest) {
     }
     const buffer = Buffer.from(content, "base64");
     const signature = buffer.slice(0, 8);
- 
-    // MP4: bytes 4-8 == 'ftyp'
-    const isMp4 = buffer.slice(4, 8).toString("utf-8") === "ftyp";
- 
-    // MP3: starts with FF FB or FF FA (MPEG frame sync) or 'ID3' tag
+
+    /* -------- File Signature Checks -------- */
+    const isMp4 = buffer.slice(4, 8).toString("utf8") === "ftyp";
+
     const isMp3 =
-      (buffer[0] === 0xFF && (buffer[1] === 0xFB || buffer[1] === 0xFA)) ||
-      buffer.slice(0, 3).toString("utf-8") === "ID3";
- 
-    // CSV: Check file extension and content type instead of content heuristics
-    const isCsv =
-      contentType.toLowerCase() === "text/csv" ||
-      key.toLowerCase().endsWith(".csv");
- 
-    // PDF: starts with '%PDF-' signature
-    const isPdf = signature.slice(0, 5).toString("utf-8") === "%PDF-";
- 
-    // JPEG: starts with FF D8 FF
+      (buffer[0] === 0xff && (buffer[1] === 0xfb || buffer[1] === 0xfa)) ||
+      buffer.slice(0, 3).toString("utf8") === "ID3";
+
+    const isPdf = signature.slice(0, 5).toString("utf8") === "%PDF-";
+
     const isJpeg =
-      buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF;
- 
-    // PNG: starts with 89 50 4E 47 (89 P N G)
+      (buffer[0] === 0xff && buffer[1] === 0xd8) || // jpeg
+      contentType === "image/jpg" ||               // jpg
+      key.toLowerCase().endsWith(".jpg");
+
     const isPng =
-      buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47;
- 
-    // SVG: XML-based, check for common SVG indicators
+      buffer[0] === 0x89 &&
+      buffer[1] === 0x50 &&
+      buffer[2] === 0x4e &&
+      buffer[3] === 0x47;
+
+    const isGif = buffer.slice(0, 3).toString("ascii") === "GIF";
+
+    const isWebp =
+      buffer.slice(0, 4).toString("ascii") === "RIFF" &&
+      buffer.slice(8, 12).toString("ascii") === "WEBP";
+
     const isSvg =
-      (contentType.toLowerCase() === "image/svg+xml" || key.toLowerCase().endsWith(".svg")) &&
-      buffer.toString("utf-8", 0, 200).includes("<svg");
- 
-    // DOC/DOCX: Check content type and file extension
+      contentType === "image/svg+xml" &&
+      buffer.toString("utf8", 0, 200).includes("<svg");
+
+    const isCsv =
+      contentType === "text/csv" || key.toLowerCase().endsWith(".csv");
+
+    const isJson =
+      contentType === "application/json" &&
+      buffer.toString("utf8", 0, 50).trim().startsWith("{");
+
+    const isXml =
+      (contentType === "application/xml" || contentType === "text/xml") &&
+      buffer.toString("utf8", 0, 100).includes("<?xml");
+
+    const isZip = buffer[0] === 0x50 && buffer[1] === 0x4b;
+
     const isDoc =
-      contentType.toLowerCase() === "application/msword" ||
-      key.toLowerCase().endsWith(".doc");
- 
+      contentType === "application/msword" || key.endsWith(".doc");
+
     const isDocx =
-      contentType.toLowerCase() === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-      key.toLowerCase().endsWith(".docx");
- 
-    // XLSX: Check content type and file extension
+      isZip &&
+      (contentType.includes("wordprocessingml") || key.endsWith(".docx"));
+
+    const isPpt =
+      contentType === "application/vnd.ms-powerpoint" ||
+      key.endsWith(".ppt");
+
+    const isPptx =
+      isZip &&
+      (contentType.includes("presentationml") || key.endsWith(".pptx"));
+
     const isXlsx =
-      contentType.toLowerCase() === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
-      key.toLowerCase().endsWith(".xlsx");
- 
-    if (!isMp4 && !isMp3 && !isCsv && !isPdf && !isJpeg && !isPng && !isSvg && !isDoc && !isDocx && !isXlsx) {
-      return NextResponse.json(
-      { error: "Uploaded file is not a valid MP4, MP3, CSV, PDF, JPEG, PNG, SVG, DOC, DOCX, or XLSX" },
-      { status: 400 }
-      );
-    }
- 
-    // Additional CSV validation
-    if (isCsv) {
-      const csvValidation = validateCsvFile(buffer, key);
-      if (!csvValidation.isValid) {
+      isZip &&
+      (contentType.includes("spreadsheetml") || key.endsWith(".xlsx"));
+
+    /* -------- SQL Validation (safe text-based) -------- */
+    const isSql =
+      contentType === "application/sql" ||
+      contentType === "text/sql" ||
+      key.toLowerCase().endsWith(".sql");
+
+    if (isSql) {
+      const sqlText = buffer.toString("utf8", 0, 200).toUpperCase();
+      if (
+        !sqlText.includes("SELECT") &&
+        !sqlText.includes("INSERT") &&
+        !sqlText.includes("UPDATE") &&
+        !sqlText.includes("DELETE") &&
+        !sqlText.includes("CREATE")
+      ) {
         return NextResponse.json(
-          {
-            error: "CSV validation failed",
-            details: csvValidation.error
-          },
+          { error: "Invalid SQL file" },
           { status: 400 }
         );
       }
     }
- 
+
+    /* -------- Final Validation Gate -------- */
+    if (
+      !isMp4 &&
+      !isMp3 &&
+      !isPdf &&
+      !isJpeg &&
+      !isPng &&
+      !isGif &&
+      !isWebp &&
+      !isSvg &&
+      !isCsv &&
+      !isJson &&
+      !isXml &&
+      !isDoc &&
+      !isDocx &&
+      !isPpt &&
+      !isPptx &&
+      !isXlsx &&
+      !isSql &&
+      !isZip
+    ) {
+      return NextResponse.json(
+        { error: "Invalid or unsupported file signature" },
+        { status: 400 }
+      );
+    }
+
+    /* -------- CSV Validation -------- */
+    if (isCsv) {
+      const csvCheck = validateCsvFile(buffer, key);
+      if (!csvCheck.isValid) {
+        return NextResponse.json(
+          { error: "CSV validation failed", details: csvCheck.error },
+          { status: 400 }
+        );
+      }
+    }
+
+    /* -------- S3 Upload -------- */
     const s3 = createS3Client();
     const bucket = getOrgBucketName(orgId || organizationId);
- 
-    // Ensure bucket exists
+
     try {
       await s3.send(new HeadBucketCommand({ Bucket: bucket }));
     } catch {
@@ -213,84 +250,57 @@ export async function POST(req: NextRequest) {
         ContentType: contentType,
       })
     );
- 
-    const minioEndpoint =
+
+    const endpoint =
       process.env.EXTERNAL_MINIO_ENDPOINT || "http://localhost:9000";
-    const minioUrl = `${minioEndpoint}/${bucket}/${encodeURIComponent(key)}`;
- 
-    // If CSV file, create a processing job
+    const url = `${endpoint}/${bucket}/${encodeURIComponent(key)}`;
+
+    /* -------- CSV Job Creation -------- */
     if (isCsv) {
-      const csvValidation = validateCsvFile(buffer, key);//
+      const csvMeta = validateCsvFile(buffer, key);
       const jobId = randomUUID();
-     
-      console.log(`[Storage Upload] Creating CSV job: jobId=${jobId}, orgId=${orgId}, file=${key}, records=${csvValidation.recordCount}`);
-     
-      try {
-        await query(
-          `INSERT INTO csv_processing_jobs
-           (job_id, organization_id, file_name, file_size, total_records, success_count, failure_count, csv_status, errors, created_by, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
-          [
+
+      await query(
+        `INSERT INTO csv_processing_jobs
+         (job_id, organization_id, file_name, file_size, total_records,
+          success_count, failure_count, csv_status, errors, created_by, created_at)
+         VALUES ($1,$2,$3,$4,$5,0,0,'queued',$6,$7,NOW())`,
+        [
+          jobId,
+          orgId || organizationId,
+          key,
+          buffer.length,
+          csvMeta.recordCount || 0,
+          JSON.stringify([]),
+          createdBy,
+        ]
+      );
+
+      return NextResponse.json(
+        {
+          bucket,
+          key,
+          url,
+          status: "uploaded",
+          csvProcessing: {
             jobId,
-            orgId || organizationId,
-            key,
-            buffer.length,
-            csvValidation.recordCount || 0,
-            0,
-            0,
-            'queued',
-            JSON.stringify([]),
-            createdBy
-          ]
-        );
- 
-        console.log(`[Storage Upload] ✅ CSV job created successfully: ${jobId}`);
- 
-        await logger.info(
-          `Created CSV processing job ${jobId} for file ${key} with ${csvValidation.recordCount} records`
-        );
- 
-        return NextResponse.json(
-          {
-            bucket,
-            key,
-            status: "uploaded",
-            url: minioUrl,
-            csvProcessing: {
-              jobId,
-              recordCount: csvValidation.recordCount,
-              headers: csvValidation.headers,
-              status: "queued"
-            }
+            recordCount: csvMeta.recordCount,
+            headers: csvMeta.headers,
+            status: "queued",
           },
-          { status: 201 }
-        );
-      } catch (dbError: any) {
-        const errorMsg = dbError instanceof Error ? dbError.message : String(dbError);
-        await logger.error(`Failed to create CSV processing job: ${errorMsg}`);
-        // Still return success for upload, but note job creation failed
-        return NextResponse.json(
-          {
-            bucket,
-            key,
-            status: "uploaded",
-            url: minioUrl,
-            warning: "File uploaded but CSV processing job creation failed",
-            error_details: errorMsg
-          },
-          { status: 201 }
-        );
-      }
+        },
+        { status: 201 }
+      );
     }
  
     return NextResponse.json(
-      { bucket, key, status: "uploaded", url: minioUrl },
+      { bucket, key, url, status: "uploaded" },
       { status: 201 }
     );
   } catch (error: any) {
-    await logger.error(`Upload failed: ${error.message || error}`);
+    await logger.error(`Upload failed: ${error.message}`);
     return NextResponse.json(
-      { error: `Upload failed: ${error.message || error}` },
+      { error: "Upload failed" },
       { status: 500 }
     );
   }
