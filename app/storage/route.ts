@@ -90,6 +90,7 @@ export async function POST(req: NextRequest) {
       );
     }
  
+ 
     const createdBy = user.userId;
     const organizationId = user.organizationId;
  
@@ -112,6 +113,20 @@ export async function POST(req: NextRequest) {
             "Only video/mp4, text/csv, application/pdf, image/jpeg, image/png, or image/svg+xml content types allowed",
         },
         { status: 400 }
+      );
+    }
+    if (
+      !contentType ||
+      !["video/mp4", "text/csv", "application/pdf", "image/jpeg", "image/png", "image/svg+xml", "audio/mpeg", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"].includes(
+      contentType.toLowerCase()
+      )
+    ) {
+      return NextResponse.json(
+      {
+        error:
+        "Only video/mp4, text/csv, application/pdf, image/jpeg, image/png, image/svg+xml, audio/mpeg, application/msword, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.ms-excel, or application/vnd.openxmlformats-officedocument.spreadsheetml.sheet content types allowed",
+      },
+      { status: 400 }
       );
     }
     if (
@@ -205,6 +220,7 @@ export async function POST(req: NextRequest) {
       await s3.send(new CreateBucketCommand({ Bucket: bucket }));
     }
  
+ 
     await s3.send(
       new PutObjectCommand({
         Bucket: bucket,
@@ -283,6 +299,7 @@ export async function POST(req: NextRequest) {
       }
     }
  
+ 
     return NextResponse.json(
       { bucket, key, status: "uploaded", url: minioUrl },
       { status: 201 }
@@ -295,5 +312,7 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+ 
+ 
  
  
