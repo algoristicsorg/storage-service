@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-
+ 
     const createdBy = user.userId;
     const organizationId = user.organizationId;
 
@@ -93,7 +93,20 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-
+    if (
+      !contentType ||
+      !["video/mp4", "text/csv", "application/pdf", "image/jpeg", "image/png", "image/svg+xml", "audio/mpeg", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"].includes(
+      contentType.toLowerCase()
+      )
+    ) {
+      return NextResponse.json(
+      {
+        error:
+        "Only video/mp4, text/csv, application/pdf, image/jpeg, image/png, image/svg+xml, audio/mpeg, application/msword, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.ms-excel, or application/vnd.openxmlformats-officedocument.spreadsheetml.sheet content types allowed",
+      },
+      { status: 400 }
+      );
+    }
     const buffer = Buffer.from(content, "base64");
     const signature = buffer.slice(0, 8);
 
@@ -228,7 +241,7 @@ export async function POST(req: NextRequest) {
     } catch {
       await s3.send(new CreateBucketCommand({ Bucket: bucket }));
     }
-
+ 
     await s3.send(
       new PutObjectCommand({
         Bucket: bucket,
@@ -279,7 +292,7 @@ export async function POST(req: NextRequest) {
         { status: 201 }
       );
     }
-
+ 
     return NextResponse.json(
       { bucket, key, url, status: "uploaded" },
       { status: 201 }
@@ -292,3 +305,5 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+ 
+ 
