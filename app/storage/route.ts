@@ -83,15 +83,26 @@ export async function POST(req: NextRequest) {
  
     const createdBy = user.userId;
     const organizationId = user.organizationId;
-
-    /* -------- Parse + Validate -------- */
-    const body = uploadSchema.parse(await req.json());
-    const { orgId, key, content, contentType } = body;
-
-    if (!ALLOWED_CONTENT_TYPES.includes(contentType.toLowerCase())) {
+ 
+    // 2. Parse request body fo to extract orgId, key, content, contentType
+    const parsedBody = await req.json();
+ 
+    // Validate against Zod schema
+    const { orgId, key, content, contentType } = uploadSchema.parse(parsedBody);
+ 
+    await logger.info(`POST /storage orgId=${orgId} key=${key}`);
+    if (
+      !contentType ||
+      !["video/mp4", "text/csv", "application/pdf", "image/jpeg", "image/png", "image/svg+xml", "audio/mpeg", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"].includes(
+      contentType.toLowerCase()
+      )
+    ) {
       return NextResponse.json(
-        { error: "Unsupported content type" },
-        { status: 400 }
+      {
+        error:
+        "Only video/mp4, text/csv, application/pdf, image/jpeg, image/png, image/svg+xml, audio/mpeg, application/msword, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.ms-excel, or application/vnd.openxmlformats-officedocument.spreadsheetml.sheet content types allowed",
+      },
+      { status: 400 }
       );
     }
     if (
