@@ -97,7 +97,7 @@ export async function POST(req: NextRequest) {
     // 2. Parse request body fo to extract orgId, key, content, contentType
     const parsedBody = await req.json();
  
-    // Validate against Zod schema
+    // Validate against Zod schema for the expected structure
     const { orgId, key, content, contentType } = uploadSchema.parse(parsedBody);
  
     await logger.info(`POST /storage orgId=${orgId} key=${key}`);
