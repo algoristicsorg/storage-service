@@ -94,7 +94,7 @@ export async function POST(req: NextRequest) {
     const createdBy = user.userId;
     const organizationId = user.organizationId;
  
-    // 2. Parse request body
+    // 2. Parse request body fo to extract orgId, key, content, contentType
     const parsedBody = await req.json();
  
     // Validate against Zod schema
